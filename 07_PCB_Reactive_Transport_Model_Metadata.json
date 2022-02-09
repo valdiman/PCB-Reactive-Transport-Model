@@ -1,0 +1,62 @@
+{
+    "@context": "https://doi.org/10.5063/schema/codemeta-2.0",
+    "@type": "SoftwareSourceCode",
+    "license": "https://spdx.org/licenses/ODC-By-1.0",
+    "codeRepository": "https://github.com/valdiman/PCB-Reactive-Transport-Model",
+    "dateCreated": "2022-02-08",
+    "datePublished": "2022-02-08",
+    "dateModified": "2022-02-08",
+    "issueTracker": "https://github.com/valdiman/PCB-Reactive-Transport-Model/issues",
+    "name": "Polychlorinated Biphenyl (PCB) Reactive Transport Model",
+    "version": "1.0.0",
+    "description": "The Polychlorinated Biphenyl (PCB) Reactive Transport Model produces simulations of congener-specific PCB concentration in the aqueous and gas phase of laboratory-scale bioreactors containing PCB-contaminated sediment slurry.  The script uses experimental passive sampler measurements and a minimization of least squares procedure to fit congener-specific adsorption and desorption coefficients to the model.  Finally, the model can simulate the reduction in volatile release of PCBs from sediment slurry to air resulting from the presence of an aerobic PCB-degrading microorganism with a known PCB biotransformation rate. ",
+    "applicationCategory": "Environmental Engineering",
+    "funding": "P42ES013661",
+    "developmentStatus": "active",
+    "isPartOf": "https://iowasuperfund.uiowa.edu/research-projects/project-5",
+    "funder": {
+        "@type": "Organization",
+        "name": "National Institutes of Environmental Health Sciences (NIEHS)"
+    },
+    "keywords": [
+        "Polychlorinated biphenyls",
+        "PCBs",
+        "contaminant fate and transport",
+        "passive sampling",
+        "bioremediation",
+        "biodegradation",
+        "bioavailability",
+        "environmental engineering",
+        "environment",
+        "remediation",
+        "environmental science",
+        "reactive transport modeling"
+    ],
+    "programmingLanguage": [
+        "R"
+    ],
+    "author": [
+        {
+            "@type": "Person",
+            "@id": "https://orcid.org/ 0000-0002-0572-1494",
+            "givenName": "Andres",
+            "familyName": "Martinez",
+            "email": "andres-martinez@uiowa.edu",
+            "affiliation": {
+                "@type": "Organization",
+                "name": "Department of Civil & Environmental Engineering, University of Iowa, Iowa City, IA"
+            }
+        },
+        {
+            "@type": "Person",
+            "@id": "https://orcid.org/ 0000-0001-9722-4964",
+            "givenName": "Christian",
+            "familyName": "Bako",
+            "email": "christian-bako@uiowa.edu",
+            "affiliation": {
+                "@type": "Organization",
+                "name": "Department of Civil & Environmental Engineering, University of Iowa, Iowa City, IA"
+            }
+        }
+    ]
+}
