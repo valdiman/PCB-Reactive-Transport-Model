@@ -1,0 +1,1164 @@
+---
+title: "PCB Reactive Transport Model for PCB 52"
+author: "AM & CMB"
+output:
+  html_document: default
+  word_document: default
+bibliography: 06_PCB_Reactive_Transport_Model_RMD_References.bib
+csl: environmental-science-and-technology.csl
+link-citations: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require("knitr")
+opts_knit$set(root.dir = "C:/Users/cbako/OneDrive - University of Iowa/ISRP_Project_5_CMB/Sample Analysis/PCB Data/P5_PCB_Kinetics_CMB_2021-01-15/P5_PCB_MassFlux_Modeling_2021-05-22/Data")
+opts_chunk$set(tidy.opts = list(width.cutoff = 40), tidy = TRUE)
+knitr::write_bib("knitr", "packages.bib")
+```
+
+# R Markdown
+
+|       This is an R Markdown document which describes the PCB reactive transport model in "Aerobic Bioaugmentation to Decrease Polychlorinated Biphenyl (PCB) Emissions from Contaminated Sediments to Air" (In Review).  This file is meant to be interpreted in the context of that journal article and will hereafter be referred to in this document as the "companion article".  The underlying data set for the companion article can be accessed at the Iowa Research Online (IRO) data deposit titled "Dataset describing polychlorinated biphenyl (PCB) congener accumulation on passive samplers and mass transport in sediment slurry bioreactors bioaugmented with _Paraburkholderia xenovorans_ LB400": <link>.
+
+<br>
+
+|       This document has been made available to (1) provide documentation on how the model script functions and (2) help researchers effectively reuse the model with underlying data from the companion article or with other datasets.  To access the raw code (.R file format) rather than the R Markdown file (.RMD) or R Markdown output files (.html, .PDF, or .docx) please see the IRO data deposit titled "Documentation of a model describing polychlorinated biphenyl (PCB) reactive mass transport in sediment slurry bioreactors bioaugmented with _Paraburkholderia xenovorans_ LB400" at <link>. 
+
+<br>
+
+|       Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on R Markdown see <http://rmarkdown.rstudio.com>.
+
+<br>
+
+---------------------------------------
+
+<br>
+
+# Model Overview
+
+|       The purpose of this model is to accurately simulate the volatile release of PCBs from contaminated sediment slurry to air and show how these emissions can be lowered by the presence of aerobic PCB-degrading microorganisms. The effect of PCB-degrading microorganisms on PCB emissions was evaluated by taking measurements of PCB accumulation on passive samplers deployed in lab-scale bioreactors with and without microorganisms present, over 35 days.
+<br>   
+
+This PCB reactive transport model consists of three major components: 
+
+(1) Absorption-desorption processes of PCBs to/from suspended particles in the aqueous phase 
+
+(2) Biotransformation PCBs in the aqueous phase
+
+(3) Air-water exchange of PCBs.
+
+<br>
+
+|       The model simultaneously solves four ordinary differential equations using the R package `deSolve`. These equations describe concentrations of an individual PCB congener (PCB~i~) in aqueous solution and air within an experimental bioreactor, at multiple timepoints.  The system of equations and a full description of each variable/constant is provided in section S5 of the companion journal article.  The air / aqueous phase PCB concentrations simulated by the model are governed by:
+
+<br>  
+
+(1) The initial PCB~i~ concentration in sediment
+
+(2) Experimental observations of PCB~i~ mass accumulated on solid-phase microextraction (SPME) fiber deployed in the aqueous phase
+
+(3) Experimental observations of PCB~i~ mass accumulated on polyurethane foam (PUF) passive samplers deployed in the headspace
+
+(4) SPME & PUF passive sampler properties
+
+(5) The physical-chemical properties of PCB~i~ being modeled
+
+(6) Control volume (bioreactor) characteristics and other experimental conditions.
+
+<br>
+
+---------------------------------------
+
+|       Before the mass balance equations can be solved, the model must be optimized by obtaining values for two key parameters through a minimization of least squares fitting procedure.  This procedure is accomplished with the Levenberg-Marquart Algorithm (LMA) from the R package `minpack.lm` and data from control bioreactors.  For more information about the LMA and the `minpack.lm` package, please see <https://en.wikipedia.org/wiki/Levenberg%E2%80%93Marquardt_algorithm> and <https://rdrr.io/cran/minpack.lm/>, respectively.
+
+<br>
+
+The key parameters obtained with the fitting procedure are: 
+
+(1) the PCB~i~ absorption rate, $k_a$; 
+
+(2) the PCB~i~ desorption rate, $k_d$;
+
+<br>
+
+|       The parameter fitting process first requires an estimates of these key parameters using first principles.  Therefore, a general understanding of how PCB~i~ will behave in the control volume is required to use this model.  
+
+<br>
+
+|       This document uses PCB 52 as an example to demonstrate how the model utilizes experimental data from controls to fit congener-specific values for $k_a$ and $k_d$ and then, using these values, accurately simulates the accumulation of PCB 52 on PUF and SPME passive samplers.  An example of how treatment conditions are also simulated is given at the conclusion of this document.
+
+<br>
+
+|       The following sections will provide commentary on how the R script functions in the "chunks" of code below the corresponding text.
+
+<br>
+
+---------------------------------------
+
+<br>
+
+### Setup
+
+|       First, load the necessary R libraries.
+
+```{r message=FALSE}
+library(dplyr) #library for reading data from Iowa Research Online (IRO) data files
+library(ggplot2) #library for plotting
+library(reshape2) # library for reshaping data (tall-narrow <-> short-wide)
+library(deSolve) # library for solving differential equations
+library(minpack.lm) # library for least squares fit using levenberg-marquart algorithm
+```
+
+<br>
+
+|       Set the working directory which contains the data files to be called by the script.  Replace "YourWdHere" with the file path.  If running the script directly from R Markdown, be sure to remove the root directory at the top of the script and change eval = TRUE for this chunk of code.
+```{r eval=FALSE}
+setwd("YourWdHere")
+```
+
+<br>
+
+|       The model reads data from the `08_Dataset_FinalPCBMass_2021-12-06.csv` file which is part of the underlying data from the companion article that has been deposited in the Iowa Research Online (IRO) data repository (**citation**).
+```{r}
+exp.data <- read.csv("08_Dataset_FinalPCBMass_2021-12-06.csv", fileEncoding="UTF-8-BOM")
+
+```
+
+<br>
+
+|       Treatments which comprise the "control group" are defined.  In the companion article, there were no significant differences in PCB accumulation between non-bioaugmented, saponin-amended bioreactors (`Sap`) and non-bioaugmented, non-saponin amended (`Ctrl`) so, these data were combined and singularly defined as the "control group" (`control`).
+```{r}
+control <- c("Ctrl", "Sap")
+
+```
+
+<br>
+
+|       Data which represent the accumulation of PCB 52 on PUF and SPME passive samplers at each timepoint are extracted from `08_Dataset_FinalPCBMass_2021-12-06.csv` using the R package `dplyr`. Mean values are calculated and joined together in a data frame called `pcb.52`, shown in a table below this chunk of code. For more information on the `dplyr` package, please visit <https://dplyr.tidyverse.org/>
+```{r message=FALSE}
+# pull congener-specific data from the dataset & calculate mean values for each 
+# sampler-treatment combination at each timepoint
+exp.mf.control <- exp.data %>%
+  filter(treatment %in% control, sampler == "SPME") %>%
+  group_by(time) %>%
+  mutate(mean(X52/length)) %>%
+  distinct(`mean(X52/length)`) %>%
+  rename("PCB 52 mass in SPME (ng/cm); Control" = `mean(X52/length)`)
+
+exp.mpuf.control <- exp.data %>%
+  filter(treatment %in% control, sampler == "PUF") %>%
+  group_by(time) %>%
+  mutate(mean(X52)) %>%
+  distinct(`mean(X52)`) %>%
+  rename("PCB 52 mass in PUF (ng); Control" = `mean(X52)`)
+
+exp.mf.LB400 <- exp.data %>%
+  filter(treatment == "LB400" & sampler == "SPME") %>%
+  group_by(time) %>%
+  mutate(mean(X52/length)) %>%
+  distinct(`mean(X52/length)`) %>%
+  rename("PCB 52 mass in SPME (ng/cm); LB400" = `mean(X52/length)`) 
+
+exp.mpuf.LB400 <- exp.data %>%
+  filter(treatment == "LB400" & sampler == "PUF") %>%
+  group_by(time) %>%
+  mutate(mean(X52)) %>%
+  distinct(`mean(X52)`) %>%
+  rename("PCB 52 mass in PUF (ng); LB400" = `mean(X52)`)
+
+exp.mf.LBSap <- exp.data %>%
+  filter(treatment == "LB400+Sap" & sampler == "SPME") %>%
+  group_by(time) %>%
+  mutate(mean(X52/length)) %>%
+  distinct(`mean(X52/length)`) %>%
+  rename("PCB 52 mass in SPME (ng/cm); LB400+Sap" = `mean(X52/length)`) 
+
+exp.mpuf.LBSap <- exp.data %>%
+  filter(treatment == "LB400+Sap" & sampler == "PUF") %>%
+  group_by(time) %>%
+  mutate(mean(X52)) %>%
+  distinct(`mean(X52)`) %>%
+  rename("PCB 52 mass in PUF (ng); LB400+Sap" = `mean(X52)`)
+
+pcb.52 <- left_join(exp.mf.control, exp.mpuf.control)  %>% 
+  left_join(exp.mf.LB400) %>% 
+  left_join(exp.mpuf.LB400) %>% 
+  left_join(exp.mf.LBSap) %>% 
+  left_join(exp.mpuf.LBSap) %>%
+  mutate(time = recode(time, `1` = 3, `2` = 11, `3` = 16, `4` = 35)) %>%
+  ungroup() %>%
+  add_row(time = 0, "PCB 52 mass in SPME (ng/cm); Control" = 0, "PCB 52 mass in PUF (ng); Control" = 0, 
+          "PCB 52 mass in SPME (ng/cm); LB400" = 0, "PCB 52 mass in PUF (ng); LB400" = 0, "PCB 52 mass in SPME (ng/cm); LB400+Sap" = 0, "PCB 52 mass in PUF (ng); LB400+Sap" = 0, .before = 1)
+
+kable(pcb.52, caption = "Table showing mean values for PCB 52 in PUF and SPME samples from 
+      non-bioaugmented controls and bioaugmented treatments at each sampling time point.  
+      Time is units of days.")
+
+```
+
+<br>
+
+---------------------------------------
+
+<br>
+
+# Reactive Transport Model for PCB 52 (`rtm.PCB52`)
+
+|       The `rtm.PCB52` function is the chief component of the PCB reactive transport model. This function defines the mass-balance for PCB 52 within the bioreactor.  It is dependent on time, the congener's initial concentration in the bioreactor, and the fitted parameters (`parms`; `ka` and `kd`).
+```{r eval=FALSE}
+#Reactive transport function
+flux.model.PCB52 = function(t, c, parms){
+```  
+
+<br>
+
+## Constants
+
+|       Constant values and dependent equations which describe the experimental conditions, bioreactor characteristics, physical-chemical properties that are specific to PCB 52, passive sampler properties, and chemical partitioning processes.  Every parameter and equation in the `rtm.PCB52` function is briefly defined in the chunk of code below in `#comment text`.  They are also fully described/referenced in section S5 of the companion article (in review).
+```{r eval=FALSE}
+ #Experimental conditions
+  R <- 8.3144 #J/(mol K) molar gas constant 
+  MH2O <- 18.0152 # g/mol water molecular weight
+  Mco2 <- 44.0094 # g/mol CO2 molecular weight
+  Tst <- 25 #C air temperature
+  Tst.1 <- 273.15 + Tst # air and standard temperature in K, 25 C
+  Tw <- 20 #C water temperature
+  Tw.1 <- 273.15 + Tw
+  
+  ## bioreactor parameters
+  Vpw <- 25/1000000 #m3 porewater volume
+  Vw <- 100/1000000 #m3 water volume
+  Va <- 125/1000000 #m3 headspace volumne
+  Aaw <- 30 #cm2 for a ~3 cm radius air-water area
+  
+  #congener-specific constants
+  Ka.w <-  0.0130452 # PCB52 dimensionless Henry's law constant @ 25 C
+  dUow <- 55517.96 # internal energy for the transfer of octanol-water for PCB 52 (J/mol)
+  logKoa <-  8.351339075 # PCB52 octanol-air equilibrium partition coefficient
+  logKow <- 5.84 # PCB52 octanol-water equilibrium partition coefficient
+  MW.pcb <- 291.976 # g/mol PCB 52 molecular weight
+  
+  #PUF constants 
+  Vpuf <- 0.000029 # m3 volume of PUF
+  Kpuf <- 10^(0.6366*logKoa-3.1774)# m3/g PCB 52-PUF equilibrium partition coefficient
+  d <- 0.0213*100^3 #g/m3 density of PUF
+  ro <- 0.0045 #m3/d sampling rate
+  
+  #SPME fiber constants
+  Af <- 0.138 #cm2 SPME area
+  Vf <- 0.000000069 #l/cm SPME volume/area
+  L <- 20 #cm SPME length
+  Kf <- 10^(1.06*logKow-1.16) # PCB 52-SPME equilibrium partition coefficient
+  ko <- 70 #cm/d PCB 52 mass transfer coefficient to SPME
+  
+  #partitioning constants
+  M <- 0.1 #kg/L solid-water ratio
+  foc <- 0.03 # organic carbon % in particles
+  K <- foc*(10^(0.94*logKow+0.42)) #L/kg sediment-water equilibrium partition coefficient
+  D.water.air <- 0.2743615 # cm2/s water's diffusion coefficient in the gas phase 
+  # @ Tair = 25 C, patm = 1013.25 mbars 
+  D.co2.w <- 1.67606E-05 # cm2/s CO2's diffusion coefficient in water 
+  #@ Tair = 25 C, patm = 1013.25 mbars 
+  D.pcb.air <- D.water.air*(MW.pcb/MH2O)^(-0.5) # cm2/s PCB 52's diffusion coefficient 
+  #in the gas phase 
+  D.pcb.water <- D.co2.w*(MW.pcb/Mco2)^(-0.5) # cm2/s PCB 52's diffusion coefficient 
+  #in water @ Tair = 25 C, patm = 1013.25 mbars
+  v.H2O <- 0.010072884	# cm2/s kinematic viscosity of water @ Tair = 25
+  V.water.air <- 0.003 # m/s water's air-side transfer coefficient without ventilation
+  V.co2.w <- 0.041 # m/s CO2's water-side transfer coefficient without ventilation
+  SC.pcb.w <- v.H2O/D.pcb.water # Schmidt number PCB 52
+``` 
+
+<br>
+
+## PCB 52 Air-Water Mass Transfer Coefficient (`kaw`) Calculations
+
+(1) Before PCB 52's air-water mass transfer coefficient (`kaw`)@Martinez2010 can be determined, the temperature corrected dimensionless Henry's law constant (`Ka.w.t`)@Goss2006 for PCB 52 must be calculated using the following equation:  
+
+|               $K_{aw}^{T_w} = K_{aw}e^({{\frac{-\Delta U_{aw}}{R}({1/t_w-1/t_{std})}}})(T_{std}/T_w)$
+```{r eval=FALSE}
+# kaw calculations
+  # i) Ka.w.t
+  Ka.w.t <- Ka.w*exp(-dUow/R*(1/Tw.1-1/Tst.1))*Tst.1/Tw.1 # Ka.w corrected by
+  #water and air temps during experiment
+  
+```
+
+<br>
+  
+(2) The air-side mass transfer coefficient for PCB 52 (`Kaw.a`) is calculated: 
+
+|               $K_{aw}^{a} = V_{H_2O-air}(\frac{D_{PCB-air}}{D_{H_2O-air}})^{0.67}$
+```{r eval=FALSE}
+  # ii) Kaw.a
+  Kaw.a <- (D.pcb.air/D.water.air)^(0.67)*V.water.air # m/s air-side mass 
+  #transfer coefficient
+```
+
+<br>
+
+(3) Next, the water-side mass transfer coefficient for PCB 52 (`Kaw.w`) is calculated: 
+
+|               $K_{aw}^{w} = V_{CO_2-water}(\frac{Sc{}}{600})^{-0.5}$
+```{r eval=FALSE}
+
+  # iii) Kaw.w
+  Kaw.w <- V.co2.w*(SC.pcb.w/600)^(-0.5) # m/s water-side mass transfer coefficient 
+  #for PCB 52. 600 is the Schmidt number of CO2 at 298 K
+```
+
+<br>
+
+(4) Then, the overall air-water partition coefficient (`kaw`) for PCB 52 can be calculated: 
+
+|               $k_{aw} =( \frac{1}{(K_{aw}^{a})(K_{aw}^{T_w})}+\frac{1}{K_{aw}^{w}})^{-1}$
+```{r eval=FALSE}
+
+  # iv) kaw
+  kaw <- (1/(Kaw.a*Ka.w.t) + (1/Kaw.w))^-1 # m/s overall air-water mass transfer 
+  #coefficient for PCB 52
+  kaw <- kaw*100*60*60*24 #cm/d overall air-water mass transfer coefficient for PCB 52
+```
+
+<br>
+
+## Biotransformation rate (`kb`)
+
+|       The biotransformation rate (`kb`) of PCB 52 was determined from previous experiments with LB400 conducted in the absence of sediment. @Bako2021a  The underlying data from these experiments are also available in Iowa Research Online (IRO)@Bako2020 and are further described in a Data in Brief article. @Bako2021b  For simplicity, the script is currently written to require manual edits to input different biotransformation rates. An example is given at the end of this document which explains how to manually edit the code.
+```{r eval=FALSE}
+
+  # biotransformation rate
+  kb <- 0 #1/d, value changes depending on experiment, 
+  #i.e., control = 0, treatments LB400 = 0.130728499, LB400+Sap = 0.13325936
+```
+
+<br>
+
+## Fitted parameters (`parms`)
+
+|       For the PCB 52 adsorption and desorption constants to be called in the `rtm.PCB52` function, they must be in the correct data format.  Therefore, the variables are passed into a list called `parms`.
+```{r eval=FALSE}
+  # flux constant passed through a list called parms
+  ka <- parms$ka #1/d
+  kd <- parms$kd #1/d
+```
+
+<br>
+
+## Calculating Derivatives of Mass Balance Equations 
+ 
+|       Using all the terms above, the derivatives of mass-balance equations for air, water, PUF, and SPME are calculated and returned as a list
+
+|               $V_w\frac{dC_w}{dt}=-k_aC_{w}V_w+k_dC_pV_{pw}-{A_{aw}k}_{aw}\left(C_{w}-\frac{C_a}{K_{aw}}\right)-k_bC_{w}V_w$
+
+<br>
+
+|               $\frac{dm_f}{dt}=\frac{k_oA_f}{L}(C_w-\frac{m_f}{V_fK_f})$
+
+<br>
+
+|               $V_a\frac{dC_a}{dt}=A_{aw}k_{aw}\left({C_w}-\frac{C_a}{K_{aw}}\right)$
+
+<br>
+
+|               $\frac{dm_{\mathrm{PUF}}}{dt}=r\ \left(C_a-\frac{m_{\mathrm{PUF}}}{V_{\mathrm{PUF}}K_{\mathrm{PUF}}D}\right)$
+
+<br>
+```{r eval=FALSE}
+  # derivatives dx/dt are computed below
+  r <- rep(0,length(c))
+  r[1] <- c["Ca"]*Aaw*kaw/(Ka.w.t*Vw*10^6) + c["Cw"]*(kd*M*K*Vpw/Vw - ka - Aaw*kaw/(Vw*10^6)) -kb*c["Cw"] #dCwdt
+  r[2] <- ko*Af*c["Cw"]/1000/L - ko*Af*c["mf"]/(Vf*L*Kf*1000) # dmfdt
+  r[3] <- c["Cw"]*(kaw*Aaw/Va)/10^6 - c["Ca"]*(kaw*Aaw/Ka.w.t/Va)/10^6 # dCadt
+  r[4] <- ro*c["Ca"]*1000 - ro*(c["mpuf"]/(Vpuf*d))/(Kpuf) # dmpufdt
+  
+  # the computed derivatives are returned as a list
+  # order of derivatives needs to be the same as the order of species in c
+  return(list(r))
+}
+```
+
+```{r echo=FALSE}
+#Reactive transport function
+rtm.PCB52 = function(t, c, parms){
+  
+  #Experimental conditions
+  R <- 8.3144 #J/(mol K) molar gas constant 
+  MH2O <- 18.0152 # g/mol water molecular weight
+  Mco2 <- 44.0094 # g/mol CO2 molecular weight
+  Tst <- 25 #C air temperature
+  Tst.1 <- 273.15 + Tst # air and standard temperature in K, 25 C
+  Tw <- 20 #C water temperature
+  Tw.1 <- 273.15 + Tw
+  
+  ## bioreactor parameters
+  Vpw <- 25/1000000 #m3 porewater volume
+  Vw <- 100/1000000 #m3 water volume
+  Va <- 125/1000000 #m3 headspace volumne
+  Aaw <- 30 #cm2 for a ~3 cm radius air-water area
+  
+  #congener-specific constants
+  Ka.w <-  0.0130452 # PCB52 dimensionless Henry's law constant @ 25 C
+  dUow <- 55517.96 # internal energy for the transfer of octanol-water for PCB 52 (J/mol)
+  logKoa <-  8.351339075 # PCB52 octanol-air equilibrium partition coefficient
+  logKow <- 5.84 # PCB52 octanol-water equilibrium partition coefficient
+  MW.pcb <- 291.976 # g/mol PCB 52 molecular weight
+  
+  #PUF constants 
+  Vpuf <- 0.000029 # m3 volume of PUF
+  Kpuf <- 10^(0.6366*logKoa-3.1774)# m3/g PCB 52-PUF equilibrium partition coefficient
+  d <- 0.0213*100^3 #g/m3 density of PUF
+  ro <- 0.0045 #m3/d sampling rate
+  
+  #SPME fiber constants
+  Af <- 0.138 #cm2 SPME area
+  Vf <- 0.000000069 #l/cm SPME volume/area
+  L <- 20 #cm SPME length
+  Kf <- 10^(1.06*logKow-1.16) # PCB 52-SPME equilibrium partition coefficient
+  ko <- 70 #cm/d PCB 52 mass transfer coefficient to SPME
+  
+  #partitioning constants
+  M <- 0.1 #kg/L solid-water ratio
+  foc <- 0.03 # organic carbon % in particles
+  K <- foc*(10^(0.94*logKow+0.42)) #L/kg sediment-water equilibrium partition coefficient
+  D.water.air <- 0.2743615 # cm2/s water's diffusion coefficient in the gas phase 
+  # @ Tair = 25 C, patm = 1013.25 mbars 
+  D.co2.w <- 1.67606E-05 # cm2/s CO2's diffusion coefficient in water 
+  #@ Tair = 25 C, patm = 1013.25 mbars 
+  D.pcb.air <- D.water.air*(MW.pcb/MH2O)^(-0.5) # cm2/s PCB 52's diffusion coefficient 
+  #in the gas phase 
+  D.pcb.water <- D.co2.w*(MW.pcb/Mco2)^(-0.5) # cm2/s PCB 52's diffusion coefficient 
+  #in water @ Tair = 25 C, patm = 1013.25 mbars
+  v.H2O <- 0.010072884	# cm2/s kinematic viscosity of water @ Tair = 25
+  V.water.air <- 0.003 # m/s water's velocity of air-side mass transfer 
+  #without ventilation
+  V.co2.w <- 0.041 # m/s mass transfer coefficient of CO2 in water side 
+  #without ventilation
+  SC.pcb.w <- v.H2O/D.pcb.water # Schmidt number PCB 52
+  
+  # kaw calculations
+  # i) Ka.w.t
+  Ka.w.t <- Ka.w*exp(-dUow/R*(1/Tw.1-1/Tst.1))*Tst.1/Tw.1 # Ka.w corrected by
+  #water and air temps during experiment
+ 
+  # ii) Kaw.a
+  Kaw.a <- (D.pcb.air/D.water.air)^(0.67)*V.water.air # m/s air-side mass 
+  #transfer coefficient
+  
+  # iii) Kaw.w
+  Kaw.w <- V.co2.w*(SC.pcb.w/600)^(-0.5) # m/s water-side mass transfer coefficient 
+  #for PCB 52. 600 is the Schmidt number of CO2 at 298 K
+  
+  # iv) kaw
+  kaw <- (1/(Kaw.a*Ka.w.t) + (1/Kaw.w))^-1 # m/s overall air-water mass transfer 
+  #coefficient for PCB 52
+  kaw <- kaw*100*60*60*24 #cm/d overall air-water mass transfer coefficient for PCB 52
+  
+  # biotransformation rate
+  kb <- 0 #1/d, value changes depending on experiment, 
+  #i.e., control = 0, treatments LB400 = 0.130728499, LB400+Sap = 0.13325936
+  
+  # flux constant passed through a list called parms
+  ka <- parms$ka #1/d
+  kd <- parms$kd #1/d
+  
+  # derivatives dx/dt are computed below
+  r <- rep(0,length(c))
+  r[1] <- c["Ca"]*Aaw*kaw/(Ka.w.t*Vw*10^6) + c["Cw"]*(kd*M*K*Vpw/Vw - ka - Aaw*kaw/(Vw*10^6)) -kb*c["Cw"] #dCwdt
+  r[2] <- ko*Af*c["Cw"]/1000/L - ko*Af*c["mf"]/(Vf*L*Kf*1000) # dmfdt
+  r[3] <- c["Cw"]*(kaw*Aaw/Va)/10^6 - c["Ca"]*(kaw*Aaw/Ka.w.t/Va)/10^6 # dCadt
+  r[4] <- ro*c["Ca"]*1000 - ro*(c["mpuf"]/(Vpuf*d))/(Kpuf) # dmpufdt
+  
+  # the computed derivatives are returned as a list
+  # order of derivatives needs to be the same as the order of species in c
+  return(list(r))
+}
+```
+  
+<br>
+
+---------------------------------------
+
+<br>
+
+# Defining Initial Conditions for PCB 52 Concentration (`cinit`)
+  
+|       The initial PCB 52 concentration in the aqueous phase (i.e., water) is estimated for a given parameter set.  The measured PCB 52 concentration in the sediment (`Ct`) was 321.5 ng/g (**citation**).  A sediment-water ratio (`M`) of 0.1 kg/L was used in the experimental bioreactor.  The fraction of organic carbon in the sediment (`foc`) was 3%.  PCB 52's log octanol-water equilibrium partition coefficient (`logkow`) is 5.84. @Hawker1988
+```{r}
+Ct <- 321.4900673 #ng/g PCB 52 sediment concentration
+```
+
+<br>
+
+|       The sediment-water partition coefficient (`K`) was estimated by the equation shown below. @Hawker1988
+
+|               $K=f_{oc}K_{oc}$
+
+<br>
+
+|       where:
+
+|                       $K_{oc}=\ 10^{(0.94{logk}_{ow}+0.42)}$
+```{r}
+logKow <- 5.84 # PCB52 octanol-water equilibrium partition coefficient
+foc <- 0.03 # organic carbon % in particles
+K <- foc*(10^(0.94*logKow+0.42)) #L/kg PCB 52 sediment-water equilibrium partition coefficient
+
+```
+
+<br>  
+
+
+|       The density of the sediment (`ds`) was estimated to be 900 g/L.  The initial water concentration of PCB 52 (`Cwi`) is estimated by the equation shown below.
+```{r}
+ds <- 900 #g/L density
+M <- 0.1 #kg/L solid-water ratio
+Cwi <- Ct*ds/(1+M*K)
+
+```
+
+<br>
+
+|       The initial conditions of PCB 52 concentration are fed into a list, `cinit`. Water concentration (`Cw`) is equal to the amount estimated above, mass on the SPME fiber (`mf`), concentration in the air (`Ca`), and mass of the PUF (`mpuf`) are all equal to zero. Biotransformation rate  (`kb`) is considered 0.
+```{r}
+cinit <- c(Cw = Cwi, mf = 0, Ca = 0, mpuf = 0)
+
+```
+
+<br>
+
+|       Timepoints (`t`) are pulled from the time column of the `pcb.52` data frame and defined as a list.
+```{r}
+t <- pcb.52$time
+
+```
+
+<br>
+
+|       Before the key parameters (`parms`) can be fitted to the model, placeholder values must be given for `ka` and `kd` so that they can be properly called in the `ssq` function used in the fitting process (described further in the next section).
+```{r}
+# Placeholder values of key parameters
+parms <- list(ka = 0.089, kd = 0.000036) # Initial guess using first principles
+
+```
+
+<br>
+
+|       The system of ordinary differential equations (`ode`) is defined and solved simultaneously using the R package `deSolve` by calling the `rtm.PCB52` function and initial concentration conditions (`cinit`) and placeholder parameters given above.  Returns the first part (`head`) of the output (`out1`) below this chunk of code.  For more information on the `deSolve` package, please visit <http://desolve.r-forge.r-project.org/>.
+```{r}
+out1 <- ode(y = cinit, times = t, func = rtm.PCB52, parms = parms)
+head(out1)
+
+```
+
+<br>
+
+---------------------------------------
+
+<br>
+
+# Defining Sum of Squares Function (`ssq`) For Parameter Fitting
+  
+|       A function to calculate the sums of squared residuals (`ssqres`) using the placeholder parameters (`parms`) from above is defined `ssq`.  The initial concentrations of PCB 52 (water concentration, `Cw = Cwi`; mass in the SPME fiber, `mf`; air concentration, `Ca`; and mass in the PUF, `mpuf`) are defined as vector `cinit` within the `ssq` function.
+```{r eval=FALSE}
+ssq = function(parms){
+
+  # initial concentration
+  cinit <- c(Cw = Cwi, mf = 0, Ca = 0, mpuf = 0)
+
+```
+
+<br>
+  
+|       A vector is defined (`t`) which contains only the timepoints for which PCB 52 data is available (those within the `time` column of the `pcb.52` dataframe).
+```{r eval=FALSE}
+  # time points for which values of mf and mpuf are reported
+  # include the points where data are available
+  t <- c(seq(0, 35, 1), pcb.52$time)
+  t <- sort(unique(t))
+```
+
+<br>
+  
+|       The placeholder values for `ka` and `kd` are called from the list of `parms` and redefined.  The square of the square root (`sqrt`) is taken to ensure non-zero values.
+```{r eval=FALSE}
+  # parameters from the parameter estimation routine. Values are forced to be positive to avoid errors in the solution
+  ka <- sqrt((parms[1])^2) #1/d
+  kd <- sqrt((parms[2])^2) #1/d
+```
+
+<br>
+
+|       The system of ordinary differential mass-balance equations (`ode`) from above (and in section S5 of the companion journal article) are solved simultaneously by calling initial conditions (`cinit`), times, (`t`), and the reactive transport function (`rtm.PCB52`).  The output is defined as `out2`.
+```{r eval=FALSE}
+  # solve ODE for a given set of parameters
+  out2 <- ode(y = cinit, times = t, func = rtm.PCB52,
+              parms = list(ka = sqrt((ka)^2), kd = sqrt((kd)^2)))
+```
+
+<br>
+
+|       A data frame is defined which contains only time points where data is available (3, 11, 16, 35 days; `out2.pcb.52`). Differences between modeled (`pred.pcb.52`) and experimental results (`exp.pcb.52`) are calculated (i.e., residuals) for the mass of PCB 52 detected in the SPME fiber and PUF passive samplers.
+```{r eval=FALSE}
+  # Filter data that contains time points where data are available
+  out2.pcb.52 <- data.frame(out2)
+  out2.pcb.52 <- out2.pcb.52[out2.pcb.52$time %in% pcb.52$time,]
+```
+
+<br>
+
+|       The `melt` function from the R package `reshape2` is used to convert both data frames which contain modeled results and experimental observations of PCB 52, respectively, into data frames which have one row for each predicted/observed value of PCB 52 (for both PUF and SPME).  For more information on the `melt` function and `reshape2` package please see <https://www.datasciencemadesimple.com/melting-casting-r/> and <https://www.rdocumentation.org/packages/reshape2/versions/1.4.4>, respectively.
+
+<br>
+
+|       The sum of squared residuals (`ssqres`) is defined as the difference between the predicted and observed amount of PCB 52 mass on both PUF (`puf`) and SPME fiber (`mf`).
+```{r eval=FALSE}
+# Evaluate predicted vs experimental residual
+  out2.pcb.52 <- subset(out2.pcb.52, select = -c(Cw, Ca)) # only mass of fiber and puf
+  pred.pcb.52 <- melt(out2.pcb.52, id.var = "time", variable.name = "sampler",
+                      value.name = "mass")
+  pcb.52.2 <- subset(pcb.52, select = c(time, `PCB 52 mass in SPME (ng/cm); Control`, `PCB 52 mass in PUF (ng); Control`)) # only mass of fiber and puf
+  exp.pcb.52 <- melt(pcb.52.2,id.var = "time", variable.name = "sampler",
+                     value.name = "mass")
+  ssqres <- pred.pcb.52$mass-exp.pcb.52$mass
+  
+  # return predicted vs experimental residual
+  return(ssqres)
+}
+
+```
+
+```{r echo=FALSE}
+ssq = function(parms){
+
+  # initial concentration
+  cinit <- c(Cw = Cwi, mf = 0, Ca = 0, mpuf = 0)
+  
+  # time points for which values of mf and mpuf are reported
+  # include the points where data are available
+  t <- c(seq(0, 35, 1), pcb.52$time)
+  t <- sort(unique(t))
+  
+  # parameters from the parameter estimation routine. Values are forced to be positive to avoid errors in the solution
+  ka <- sqrt((parms[1])^2) #1/d
+  kd <- sqrt((parms[2])^2) #1/d
+  
+  # solve ODE for a given set of parameters
+  out2 <- ode(y = cinit, times = t, func = rtm.PCB52,
+              parms = list(ka = sqrt((ka)^2), kd = sqrt((kd)^2)))
+  
+  # Filter data that contains time points where data are available
+  out2.pcb.52 <- data.frame(out2)
+  out2.pcb.52 <- out2.pcb.52[out2.pcb.52$time %in% pcb.52$time,]
+  
+  # Evaluate predicted vs experimental residual
+  out2.pcb.52 <- subset(out2.pcb.52, select = -c(Cw, Ca)) # only mass of fiber and puf
+  pred.pcb.52 <- melt(out2.pcb.52, id.var = "time", variable.name = "sampler",
+                      value.name = "mass")
+  pcb.52.2 <- subset(pcb.52, select = c(time, `PCB 52 mass in SPME (ng/cm); Control`, `PCB 52 mass in PUF (ng); Control`)) # only mass of fiber and puf
+  exp.pcb.52 <- melt(pcb.52.2,id.var = "time", variable.name = "sampler",
+                     value.name = "mass")
+  ssqres <- pred.pcb.52$mass-exp.pcb.52$mass
+  
+  # return predicted vs experimental residual
+  return(ssqres)
+}
+```
+
+<br>
+
+---------------------------------------
+
+<br>
+
+# Parameter Fitting with the Levenberg-Marquart Algorithm (LMA)
+
+|       The LMA is used to fit parameters (`parms`) `ka` and `kd` to the model through iterative minimization of least squares.
+
+<br>
+
+## Initial Guess for `parms`
+
+|       An initial guess of `ka` = 14 and `kd` = 0.0232 is provided and assigned to `parms`.
+```{r}
+# parameter fitting using levenberg marquart algorithm
+# second guess for parameters
+parms <- c(ka = 14, kd = 0.0232)
+```
+
+<br>
+
+## Parameter Fitting with `nls.lm`
+
+The fitted values are calculated and defined as (`fitval`) using `nls.lm` from the `minpack.lm` package which calls `parms` and the `ssq` function defined above. 
+
+A `summary` of the `fitval` results is printed below this chunk of code.
+```{r}
+# fitting
+fitval <- nls.lm(par = parms, fn = ssq)
+summary(fitval)
+```
+
+<br>
+
+---------------------------------------
+
+<br>
+
+# Simulating PCB 52 sorption rates with Fitted `ka` and `kd` Values
+
+|       The fitted values (`fitval`) of `parms` `ka` and `kd` are defined as a list, `parest` (estimated parameters).  The estimated parameters are called from the list as a vector and assigned to `parms`.
+```{r}
+# Estimated parameter
+parest <- as.list(coef(fitval))
+parms <- list(ka = parest$ka, kd = parest$kd)
+```
+
+<br>
+
+|       The initial PCB 52 concentration conditions (`cinit`) are redefined.
+```{r}
+# simulated predicted profile at estimated parameter values
+cinit <- c(Cw = Cwi, mf = 0, Ca = 0, mpuf = 0)
+```
+
+<br>
+
+|       A vector of time values from 0 to 40, incremented by 0.5 days, is defined as `t.2`.
+```{r}
+t.2 <- c(seq(0, 40, 0.5))
+```
+
+<br>
+
+|       The system of ordinary differential mass-balance equations (`ode`) is solved again. The output is defined as `out3`.
+```{r}
+out3 <- ode(y = cinit, times = t.2, func = rtm.PCB52, parms = parest)
+```
+
+<br>
+
+|       The simulated results (`out3`) are defined as a dataframe (`out.plot`) to finally be plotted!
+```{r}
+out.plot <- data.frame(out3)
+```
+
+<br>
+
+---------------------------------------
+
+<br>
+
+# Plotting Simulated Results & Experimental Observations
+
+|       The `out.plot` data.frame is assigned column `names`.
+```{r}
+# plot of predicted vs experimental data
+# Overlay predicted profile with experimental data
+
+names(out.plot) <- c("time", "PCB 52 predicted Cw", "PCB 52 predicted mass fiber",
+                     "PCB 52 predicted Ca", "PCB 52 predicted mass PUF")
+```
+
+<br>
+
+|       A `subset` of `out.plot` which describes only the simulated mass of PCB 52 in the SPME fiber (`mf`) is called and assigned to `out.plot.mf`.
+```{r}
+out.plot.mf <- subset(out.plot,
+                      select = c(time, `PCB 52 predicted mass fiber`)) # only mass of fiber
+```
+
+<br>
+
+|       A `subset` of `out.plot` which describes only the simulated mass of PCB 52 the PUF (`mpuf`) is called and assigned to `out.plot.mpuf`. 
+```{r}
+out.plot.mpuf <- subset(out.plot,
+                        select = c(time, `PCB 52 predicted mass PUF`)) # only mass of puf
+```
+
+<br>
+
+|       The `melt` function is used to get the simulated passive sampler data in the correct format to be plotted and is assigned to `pred.mf` and `pred.mpuf` for the SPME fiber and PUF, respectively.
+```{r}
+pred.mf <- melt(out.plot.mf, id.var = c("time"),
+                variable.name = "compartment", value.name = "mass")
+pred.mpuf <- melt(out.plot.mpuf, id.var = c("time"),
+                  variable.name = "compartment", value.name = "mass")
+```
+
+<br>
+
+|       The same processes are repeated for `subsets` of data from the `pcb.52` data.frame which describe only **experimental** data for PCB 52 mass that had accumulated on SPME fibers (`mf`) and PUF passive samplers (`mpuf`) in the controls from the companion article.   If other treatments are to be called and plotted, manual edits to the chunk of code below are required.  See below for an example to plot the LB400 treatment.  
+```{r}
+pcb.52.mf <- subset(pcb.52, select = c(time, `PCB 52 mass in SPME (ng/cm); Control`)) # only mass of fiber
+pcb.52.mpuf <- subset(pcb.52, select = c(time, `PCB 52 mass in PUF (ng); Control`)) # only mass of puf
+exp.mf <- melt(pcb.52.mf, id.var = c("time"), variable.name = "compartment",
+               value.name = "mass")
+exp.mpuf <- melt(pcb.52.mpuf, id.var = c("time"), variable.name = "compartment",
+                 value.name = "mass")   
+```
+
+<br>
+```{r}
+names(pcb.52.mf) <- c("time", "PCB 52 measured mass fiber")
+names(pcb.52.mpuf) <- c("time", "PCB 52 measured mass PUF")
+```
+
+<br>
+
+|       The R package `ggplot2` is used to `print` two plots which overlay simulated results from this model with experimental measurements taken in the control bioreactors with SPME fiber (`mf`) and PUF (`mpuf`) passive samplers. For more information on the `ggplot2` package please visit <https://ggplot2.tidyverse.org/>. 
+
+<br>
+
+|       See below for an example on how to manually edit the code to overlay simulated results with experimental measurements from the LB400 treatment.
+```{r}
+mf <- ggplot(data = pred.mf, aes(x = time, y = mass)) +
+  geom_line(colour = 2) +
+  geom_point(data = exp.mf, aes(x = time, y = mass), color = 2) +
+  theme_bw() +
+  theme(aspect.ratio = 6/10) +
+  ggtitle("Control - SPME Fiber Results for PCB 52") +
+  xlab(expression(bold("Time (day)"))) +
+  ylab(expression(bold("PCB 52 fiber mass accumulated  (ng/cm)"))) +
+  ylim(0, 0.4) +
+  xlim(0, 40)
+
+print(mf)
+
+mpuf <- ggplot(data = pred.mpuf, aes(x = time, y = mass)) +
+  geom_line(colour = 4) +
+  geom_point(data = exp.mpuf, aes(x = time, y = mass), color = 4) +
+  theme_bw() +
+  theme(aspect.ratio = 6/10) +
+  ggtitle("Control - PUF Results for PCB 52") +
+  xlab(expression(bold("Time (day)"))) +
+  ylab(expression(bold("PCB 52 PUF mass accumulated (ng/PUF)"))) +
+  ylim(0, 80) +
+  xlim(0, 40)
+
+print(mpuf)
+
+```
+
+<br>
+
+---------------------------------------
+
+<br>
+
+
+# How to Input Different Biotransformation Rates to Simulate Different Treatment Conditions
+ 
+|       The biotransformation rate (`kb`) changes depending on treatment conditions (i.e., for control `kb` = 0 d^-1^, for LB400 `kb` = 0.130728499 d^-1^, and for LB400+Sap `kb` = 0.13325936 d^-1^.
+
+<br>
+
+|       The biotransformation rate was set to 0 in the equations above to reflect the control condition from the companion article.  **For example,**  to simulate results of the LB400 condition the user must manually edit the following line of code in the `rtm.PCB52` function to changing the biotransformation rate (`kb`) is defined as 0.130728499 d^-1^: 
+```{r eval=FALSE}
+  kb <- 0.130728499 #1/d, kb value changes depending on experiment, 
+#i.e., control = 0, treatments LB400 = 0.130728499, #LB00+Sap = 0.13325936
+```
+
+<br>
+
+|       Changing the `kb` value within the `flux.model.PCB52` function modifies the result of the solution given by the set of ordinary differential equations.  However, manual edits to `ssq` function are also required to make sure the model calls the correct set of simulated data to calculate residual values.  Modify the following line of code within the `ssq` function to achieve this:
+```{r eval=FALSE}
+pcb.52.2 <- subset(pcb.52, select = c(time, "Change this value to the corresponding column heading 
+in the pcb.52 dataframe, shown near the top of this document and again below")) 
+# only mass of fiber and puf
+```
+
+```{r echo=FALSE}
+kable(pcb.52)
+```
+
+<br>
+
+|       Therefore, to call the set of simulated data for PCB 52 accumulated on the passive samplers in the LB400 treatment, the line of code should read be as follows:
+
+```{r eval= FALSE}
+
+pcb.52.2 <- subset(pcb.52, select = c(time, `PCB 52 mass in SPME (ng/cm); LB400`, `PCB 52 mass in PUF (ng); LB400`)) # only mass of fiber and puf
+```
+
+# How to Plot Different Experimental Data
+
+|       The simulated results plotted above were overlaid with experimental data from the controls because the PCB 52 biotransformation rate (`kb`) value was set to 0.
+
+<br>
+
+|       Continuing with the LB400 example from directly above, the following manual edits to the code must be made if a user wishes to overlay simulated results from the LB400 treatment with `kb` = 0.130728499 d^-1^ on corresponding experimental data:
+```{r eval= FALSE}
+
+pcb.52.mf <- subset(pcb.52, select = c(time, "Change this value to the corresponding column heading in the 
+pcb.52 dataframe, shown in the example directly above")) 
+# only mass of fiber. 
+```
+
+<br>
+
+|       Therefore, to plot the experimental data for PCB 52 accumulated on the SPME fiber in the LB400 treatment, the line of code should be as follows:
+```{r eval= FALSE}
+
+pcb.52.mf <- subset(pcb.52, select = c(time, `PCB 52 mass in SPME (ng/cm); LB400`)) # only mass of fiber.
+```
+
+<br>
+
+|       To plot the PCB 52 PUF data for the LB400 treatment:
+```{r eval= FALSE}
+pcb.52.mpuf <- subset(pcb.52, select = c(time, `PCB 52 mass in PUF (ng); LB400`)) # only mass of puf.
+```
+
+<br>
+
+|       The plot titles can also be edited to reflect these changes: 
+```{r eval= FALSE}
+mf <- ggplot(data = pred.mf, aes(x = time, y = mass)) +
+  geom_line(colour = 2) +
+  geom_point(data = exp.mf, aes(x = time, y = mass), color = 2) +
+  theme_bw() +
+  theme(aspect.ratio = 6/10) + #Change the plot title for the SPME fiber plot here! 
+  ggtitle("Treatment with LB400 - SPME Fiber Results for PCB 52") + 
+  xlab(expression(bold("Time (day)"))) +
+  ylab(expression(bold("PCB 52 fiber mass accumulated  (ng/cm)"))) +
+  ylim(0, 0.4) +
+  xlim(0, 40)
+
+print(mf)
+
+mpuf <- ggplot(data = pred.mpuf, aes(x = time, y = mass)) +
+  geom_line(colour = 4) +
+  geom_point(data = exp.mpuf, aes(x = time, y = mass), color = 4) +
+  theme_bw() +
+  theme(aspect.ratio = 6/10) +  #And the PUF plot here! 
+  ggtitle("Treatment with LB400 - PUF Results for PCB 52") + 
+  xlab(expression(bold("Time (day)"))) +
+  ylab(expression(bold("PCB 52 PUF mass accumulated (ng/PUF)"))) + 
+  ylim(0, 75) +
+  xlim(0, 40)
+
+print(mpuf)
+
+```
+
+<br>
+
+|       After correctly editing and executing the code with these changes implemented, the following plots showing the simulated and experimental data for the LB400 treatment will be produced (`kb` = 0.130728499 d^-1^):
+```{r echo=FALSE}
+#Reactive transport function
+rtm.PCB52 = function(t, c, parms){
+  
+  #Experimental conditions
+  R <- 8.3144 #J/(mol K) molar gas constant 
+  MH2O <- 18.0152 # g/mol water molecular weight
+  Mco2 <- 44.0094 # g/mol CO2 molecular weight
+  Tst <- 25 #C air temperature
+  Tst.1 <- 273.15 + Tst # air and standard temperature in K, 25 C
+  Tw <- 20 #C water temperature
+  Tw.1 <- 273.15 + Tw
+  
+  ## bioreactor parameters
+  Vpw <- 25/1000000 #m3 porewater volume
+  Vw <- 100/1000000 #m3 water volume
+  Va <- 125/1000000 #m3 headspace volumne
+  Aaw <- 30 #cm2 for a ~3 cm radius air-water area
+  
+  #congener-specific constants
+  Ka.w <-  0.0130452 # PCB52 dimensionless Henry's law constant @ 25 C
+  dUow <- 55517.96 # internal energy for the transfer of octanol-water for PCB 52 (J/mol)
+  logKoa <-  8.351339075 # PCB52 octanol-air equilibrium partition coefficient
+  logKow <- 5.84 # PCB52 octanol-water equilibrium partition coefficient
+  MW.pcb <- 291.976 # g/mol PCB 52 molecular weight
+  
+  #PUF constants 
+  Vpuf <- 0.000029 # m3 volume of PUF
+  Kpuf <- 10^(0.6366*logKoa-3.1774)# m3/g PCB 52-PUF equilibrium partition coefficient
+  d <- 0.0213*100^3 #g/m3 density of PUF
+  ro <- 0.0045 #m3/d sampling rate
+  
+  #SPME fiber constants
+  Af <- 0.138 #cm2 SPME area
+  Vf <- 0.000000069 #l/cm SPME volume/area
+  L <- 20 #cm SPME length
+  Kf <- 10^(1.06*logKow-1.16) # PCB 52-SPME equilibrium partition coefficient
+  ko <- 70 #cm/d PCB 52 mass transfer coefficient to SPME
+  
+  #partitioning constants
+  M <- 0.1 #kg/L solid-water ratio
+  foc <- 0.03 # organic carbon % in particles
+  K <- foc*(10^(0.94*logKow+0.42)) #L/kg sediment-water equilibrium partition coefficient
+  D.water.air <- 0.2743615 # cm2/s water's diffusion coefficient in the gas phase 
+  # @ Tair = 25 C, patm = 1013.25 mbars 
+  D.co2.w <- 1.67606E-05 # cm2/s CO2's diffusion coefficient in water 
+  #@ Tair = 25 C, patm = 1013.25 mbars 
+  D.pcb.air <- D.water.air*(MW.pcb/MH2O)^(-0.5) # cm2/s PCB 52's diffusion coefficient 
+  #in the gas phase 
+  D.pcb.water <- D.co2.w*(MW.pcb/Mco2)^(-0.5) # cm2/s PCB 52's diffusion coefficient 
+  #in water @ Tair = 25 C, patm = 1013.25 mbars
+  v.H2O <- 0.010072884	# cm2/s kinematic viscosity of water @ Tair = 25
+  v.H2O <- 0.010072884	# cm2/s kinematic viscosity of water @ Tair = 25
+  V.water.air <- 0.003 # m/s water's air-side transfer coefficient without ventilation
+  V.co2.w <- 0.041 # m/s CO2's water-side transfer coefficient without ventilation
+  SC.pcb.w <- v.H2O/D.pcb.water # Schmidt number PCB 52
+  
+  # kaw calculations
+  # i) Ka.w.t
+  Ka.w.t <- Ka.w*exp(-dUow/R*(1/Tw.1-1/Tst.1))*Tst.1/Tw.1 # Ka.w corrected by
+  #water and air temps during experiment
+ 
+  # ii) Kaw.a
+  Kaw.a <- (D.pcb.air/D.water.air)^(0.67)*V.water.air # m/s air-side mass 
+  #transfer coefficient
+  
+  # iii) Kaw.w
+  Kaw.w <- V.co2.w*(SC.pcb.w/600)^(-0.5) # m/s water-side mass transfer coefficient 
+  #for PCB 52. 600 is the Schmidt number of CO2 at 298 K
+  
+  # iv) kaw
+  kaw <- (1/(Kaw.a*Ka.w.t) + (1/Kaw.w))^-1 # m/s overall air-water mass transfer 
+  #coefficient for PCB 52
+  kaw <- kaw*100*60*60*24 #cm/d overall air-water mass transfer coefficient for PCB 52
+  
+  # biotransformation rate
+  kb <- 0.130728499 #1/d, value changes depending on experiment, 
+  #i.e., control = 0, treatments LB400 = 0.130728499, LB400+Sap = 0.13325936
+  
+  # flux constant passed through a list called parms
+  ka <- parms$ka #1/d
+  kd <- parms$kd #1/d
+  
+  # derivatives dx/dt are computed below
+  r <- rep(0,length(c))
+  r[1] <- c["Ca"]*Aaw*kaw/(Ka.w.t*Vw*10^6) + c["Cw"]*(kd*M*K*Vpw/Vw - ka - Aaw*kaw/(Vw*10^6)) -kb*c["Cw"] #dCwdt
+  r[2] <- ko*Af*c["Cw"]/1000/L - ko*Af*c["mf"]/(Vf*L*Kf*1000) # dmfdt
+  r[3] <- c["Cw"]*(kaw*Aaw/Va)/10^6 - c["Ca"]*(kaw*Aaw/Ka.w.t/Va)/10^6 # dCadt
+  r[4] <- ro*c["Ca"]*1000 - ro*(c["mpuf"]/(Vpuf*d))/(Kpuf) # dmpufdt
+  
+  # the computed derivatives are returned as a list
+  # order of derivatives needs to be the same as the order of species in c
+  return(list(r))
+}
+
+Ct <- 321.4900673 #ng/g
+logKow <- 5.84 # PCB52 octanol-water equilibrium partition coefficient
+foc <- 0.03 # organic carbon % in particles
+K <- foc*(10^(0.94*logKow+0.42)) #L/kg
+ds <- 900 #g/L density
+M <- 0.1 #kg/L solid-water ratio
+Cwi <- Ct*ds/(1+M*K)
+cinit <- c(Cw = Cwi, mf = 0, Ca = 0, mpuf = 0)
+
+t <- pcb.52$time
+
+# Placeholder values of key parameters
+parms <- list(ka = 0.089, kd = 0.000036) # First guess
+out <- ode(y = cinit, times = t, func = rtm.PCB52, parms = parms)
+
+ssq = function(parms){
+
+  # initial concentration
+  cinit <- c(Cw = Cwi, mf = 0, Ca = 0, mpuf = 0)
+  
+  # time points for which conc is reported
+  # include the points where data is available
+  t <- c(seq(0, 35, 1), pcb.52$time)
+  t <- sort(unique(t))
+  
+  # parameters from the parameter estimation routine. Values are forced to be positive to avoid errors in the solution
+  ka <- sqrt((parms[1])^2) #1/d
+  kd <- sqrt((parms[2])^2) #1/d
+  
+  # solve ODE for a given set of parameters
+  out2 <- ode(y = cinit, times = t, func = rtm.PCB52,
+              parms = list(ka = sqrt((ka)^2), kd = sqrt((kd)^2)))
+  
+  # Filter data that contains time points where data is available
+  out2.pcb.52 <- data.frame(out2)
+  out2.pcb.52 <- out2.pcb.52[out2.pcb.52$time %in% pcb.52$time,]
+  
+  # Evaluate predicted vs experimental residual
+  out2.pcb.52 <- subset(out2.pcb.52, select = -c(Cw, Ca)) # only mass of fiber and puf
+  pred.pcb.52 <- melt(out2.pcb.52, id.var = "time", variable.name = "sampler",
+                      value.name = "mass")
+  pcb.52.2 <- subset(pcb.52, select = c(time, `PCB 52 mass in SPME (ng/cm); LB400`, `PCB 52 mass in PUF (ng); LB400`)) # only mass of fiber and puf
+  exp.pcb.52 <- melt(pcb.52.2,id.var = "time", variable.name = "sampler",
+                     value.name = "mass")
+  ssqres <- pred.pcb.52$mass-exp.pcb.52$mass
+  
+  # return predicted vs experimental residual
+  return(ssqres)
+}
+
+# parameter fitting using levenberg marquart algorithm
+# second guess for parameters
+parms <- c(ka = 14, kd = 0.0232)
+# fitting
+fitval <- nls.lm(par = parms, fn = ssq)
+
+# Estimated parameter
+parest <- as.list(coef(fitval))
+parms <- list(ka = parest$ka, kd = parest$kd)
+
+cinit <- c(Cw = Cwi, mf = 0, Ca = 0, mpuf = 0)
+t.3 <- c(seq(0, 40, 0.5))
+out4 <- ode(y = cinit, times = t.3, func = rtm.PCB52, parms = parest)
+out.plot <- data.frame(out4)
+
+#plotting
+names(out.plot) <- c("time", "PCB 52 predicted Cw", "PCB 52 predicted mass fiber",
+                     "PCB 52 predicted Ca", "PCB 52 predicted mass PUF")
+
+out.plot.mf <- subset(out.plot,
+                      select = c(time, `PCB 52 predicted mass fiber`)) # only mass of fiber
+out.plot.mpuf <- subset(out.plot,
+                        select = c(time, `PCB 52 predicted mass PUF`)) # only mass of puf
+pred.mf <- melt(out.plot.mf, id.var = c("time"),
+                variable.name = "compartment", value.name = "mass")
+pred.mpuf <- melt(out.plot.mpuf, id.var = c("time"),
+                  variable.name = "compartment", value.name = "mass")
+pcb.52.mf <- subset(pcb.52, select = c(time, `PCB 52 mass in SPME (ng/cm); LB400`)) # only mass of fiber
+names(pcb.52.mf) <- c("time", "PCB 52 measured mass fiber")
+exp.mf <- melt(pcb.52.mf, id.var = c("time"), variable.name = "compartment",
+               value.name = "mass")
+pcb.52.mpuf <- subset(pcb.52, select = c(time, `PCB 52 mass in PUF (ng); LB400`)) # only mass of puf
+names(pcb.52.mpuf) <- c("time", "PCB 52 measured mass PUF")
+exp.mpuf <- melt(pcb.52.mpuf, id.var = c("time"), variable.name = "compartment",
+                 value.name = "mass")
+
+mf.LB400 <- ggplot(data = pred.mf, aes(x = time, y = mass)) +
+  geom_line(colour = 3) +
+  geom_point(data = exp.mf, aes(x = time, y = mass), color = 3) +
+  theme_bw() +
+  theme(aspect.ratio = 6/10) +
+  ggtitle("Treatment with LB400 - SPME Fiber Results for PCB 52") + 
+  xlab(expression(bold("Time (day)"))) +
+  ylab(expression(bold("PCB 52 fiber mass accumulated  (ng/cm)"))) +
+  ylim(0, 0.4) +
+  xlim(0, 40)
+
+print(mf.LB400)
+
+mpuf.LB400 <- ggplot(data = pred.mpuf, aes(x = time, y = mass)) +
+  geom_line(colour = 6) +
+  geom_point(data = exp.mpuf, aes(x = time, y = mass), color = 6) +
+  theme_bw() +
+  theme(aspect.ratio = 6/10) +
+  ggtitle("Treatment with LB400 - PUF Results for PCB 52") + 
+  xlab(expression(bold("Time (day)"))) +
+  ylab(expression(bold("PCB 52 PUF mass accumulated (ng/PUF)"))) + 
+  ylim(0, 80) +
+  xlim(0, 40)
+
+print(mpuf.LB400)
+```
+<br>
+
+---------------------------------------
+
+<br>
+
+# References
+
+<br>
